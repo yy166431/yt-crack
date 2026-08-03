@@ -1,0 +1,99 @@
+
+[YTUnlock] ==== new session 2026-08-03 13:54:49 +0000 ====
+[YTUnlock] ctor start
+[YTUnlock] patching LoginViewController
+[YTUnlock] hooked viewDidAppear:
+[YTUnlock] hooked submitTapped
+[YTUnlock] ctor done (direct)
+[YTUnlock] LoginVC appeared, will unlock after settle
+[YTUnlock] report(prev-session) -> sent
+[YTUnlock] settle done, firing unlock now
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=1
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=1
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=1
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] manual unlock done fin=1
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] submitTapped -> direct unlock
+[YTUnlock] block caps: +0x20=UIWindow  +0x28=AppViewController
+[YTUnlock] manual unlock: setRootViewController:AppViewController on UIWindow
+[YTUnlock] fireUnlock exception: +[AppViewController _preferredInterfaceOrientationGivenCurrentOrientation:]: unrecognized selector sent to class 0x109e291c8
+[YTUnlock] manual unlock done fin=0
+[YTUnlock] manual unlock done fin=1

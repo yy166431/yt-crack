@@ -163,6 +163,39 @@ static UIWindow *findWindow(id vc) {
     return nil;
 }
 
+// 给 AppViewController 补上 UIKit 查询朝向用的私有方法(缺失会 unrecognized selector 崩)。
+// 类方法(元类)和实例方法都补; 返回 UIInterfaceOrientationPortrait(1) / mask=all(2)。
+static NSInteger shimOrientation(id self_, SEL _cmd, ...) { return 1; } // Portrait
+static NSInteger shimOrientationMask(id self_, SEL _cmd, ...) { return 2; } // Portrait mask
+static BOOL shimNo(id self_, SEL _cmd, ...) { return NO; }
+
+static void addIfMissing(Class cls, SEL sel, IMP imp, const char *types) {
+    if (!cls || !sel) return;
+    // 已有(自身或父类可响应)就不覆盖
+    if (class_getInstanceMethod(cls, sel)) return;
+    class_addMethod(cls, sel, imp, types);
+}
+
+static void installOrientationShim(Class instCls) {
+    if (!instCls) return;
+    Class metaCls = object_getClass(instCls); // 元类: 用于补类方法(+...)
+    SEL sOrient = sel_registerName("_preferredInterfaceOrientationGivenCurrentOrientation:");
+    SEL sPref   = @selector(preferredInterfaceOrientationForPresentation);
+    SEL sMask   = @selector(supportedInterfaceOrientations);
+    SEL sAuto   = @selector(shouldAutorotate);
+    // 崩的是 +[AppViewController _preferred...] → 补到元类(类方法)
+    addIfMissing(metaCls, sOrient, (IMP)shimOrientation, "q@:q");
+    addIfMissing(metaCls, sPref,   (IMP)shimOrientation, "q@:");
+    addIfMissing(metaCls, sMask,   (IMP)shimOrientationMask, "q@:");
+    addIfMissing(metaCls, sAuto,   (IMP)shimNo, "B@:");
+    // 实例侧也补一份,防后续实例方法查询同样缺失
+    addIfMissing(instCls, sOrient, (IMP)shimOrientation, "q@:q");
+    addIfMissing(instCls, sPref,   (IMP)shimOrientation, "q@:");
+    addIfMissing(instCls, sMask,   (IMP)shimOrientationMask, "q@:");
+    addIfMissing(instCls, sAuto,   (IMP)shimNo, "B@:");
+    YLOG(@"orientation shim installed on %s (+meta)", class_getName(instCls));
+}
+
 // 不再调用 onAuthorized block（其头部有完整性 guard，直接调会被系统打掉）。
 // 改为：从 block 对象里把它捕获的"真·YouTube 根 VC"(偏移 +0x28) 抠出来，
 // 自己做 setRootViewController，完全绕开那段 guard。
@@ -198,6 +231,16 @@ static void fireUnlock(id vc) {
 
         if (!rootVC) { YLOG(@"rootVC(+0x28) nil, abort"); return; }
         if (!win)    { YLOG(@"window not found, abort"); return; }
+
+        // 诊断: cap28 是实例还是类对象?
+        BOOL rootIsClass = class_isMetaClass(object_getClass(rootVC));
+        YLOG(@"rootVC diag: isClass=%d className=%s", rootIsClass, object_getClassName(rootVC));
+
+        // 关键修复: 设完 rootViewController 后 UIKit 会向 AppViewController(类)发
+        //   +_preferredInterfaceOrientationGivenCurrentOrientation: 查朝向,
+        //   该私有类方法在此路径缺失 → unrecognized selector 崩。
+        //   运行时给 AppViewController 的类和元类都补上,返回合法朝向。
+        installOrientationShim(object_getClass(rootVC));
 
         YLOG(@"manual unlock: setRootViewController:%@ on %@",
              NSStringFromClass(object_getClass(rootVC)), NSStringFromClass(object_getClass(win)));
