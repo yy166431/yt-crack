@@ -178,32 +178,26 @@ static void fireUnlock(id vc) {
         if (!blockObj) { @try { blockObj = [vc valueForKey:@"onAuthorized"]; } @catch (__unused id e) {} }
         if (!blockObj) { YLOG(@"onAuthorized not ready"); return; }
 
-        // block 内存布局: +0x00 isa | +0x08 flags | +0x10 invoke | +0x18 desc
-        //                +0x20 弱引用 window | +0x28 强引用 rootVC
+        // block 内存布局(反汇编确认): +0x00 isa | +0x08 flags | +0x10 invoke | +0x18 desc
+        //   +0x20 = window(弱引用)  | +0x28 = rootVC(强引用, AppViewController)
+        // nested block: ldp x0,x2,[x0,#0x20] -> setRootViewController: → 窗口在+0x20,VC在+0x28
+        // 不做 isKindOfClass 判定（AppViewController 可能不走标准继承链，判定会误伤），直接按偏移用。
         void * const *layout = (void * const *)(__bridge const void *)blockObj;
-        id cap20 = (__bridge id)layout[4];   // +0x20
-        id cap28 = (__bridge id)layout[5];   // +0x28
+        id cap20 = (__bridge id)layout[4];   // +0x20 window
+        id cap28 = (__bridge id)layout[5];   // +0x28 rootVC
 
         YLOG(@"block caps: +0x20=%@  +0x28=%@",
              cap20 ? NSStringFromClass(object_getClass(cap20)) : @"nil",
              cap28 ? NSStringFromClass(object_getClass(cap28)) : @"nil");
 
-        // 找出哪个捕获是 UIViewController（要装的根 VC），哪个是 UIWindow
-        UIViewController *rootVC = nil;
-        UIWindow *capWin = nil;
-        for (id c in @[ cap20 ?: [NSNull null], cap28 ?: [NSNull null] ]) {
-            if (c == [NSNull null]) continue;
-            if ([c isKindOfClass:[UIWindow class]]) capWin = c;
-            else if ([c isKindOfClass:[UIViewController class]]) rootVC = c;
-        }
-        if (!rootVC) {
-            // 兜底：+0x28 按约定就是 rootVC
-            if (cap28 && [cap28 isKindOfClass:[UIViewController class]]) rootVC = cap28;
-        }
-        if (!rootVC) { YLOG(@"rootVC not found in block caps, abort"); return; }
+        UIViewController *rootVC = cap28;                 // 按固定偏移取根 VC
+        UIWindow *win = nil;
+        if ([cap20 isKindOfClass:[UIWindow class]]) win = cap20;   // +0x20 优先
+        if (!win) win = findWindow(vc);                            // 退回 self.view.window
+        if (!win && [cap20 respondsToSelector:@selector(setRootViewController:)]) win = cap20;
 
-        UIWindow *win = capWin ?: findWindow(vc);
-        if (!win) { YLOG(@"window not found, abort"); return; }
+        if (!rootVC) { YLOG(@"rootVC(+0x28) nil, abort"); return; }
+        if (!win)    { YLOG(@"window not found, abort"); return; }
 
         YLOG(@"manual unlock: setRootViewController:%@ on %@",
              NSStringFromClass(object_getClass(rootVC)), NSStringFromClass(object_getClass(win)));
