@@ -7,13 +7,20 @@ THEOS_PACKAGE_SCHEME := rootless
 
 include $(THEOS)/makefiles/common.mk
 
+# ===== 去授权 tweak（成品，MobileSubstrate 注入）=====
 TWEAK_NAME := YTUnlock
-
 YTUnlock_FILES := Tweak/Tweak.xm
 YTUnlock_CFLAGS := -fobjc-arc -Wno-deprecated-declarations
 YTUnlock_FRAMEWORKS := UIKit Foundation
-# 关键：关闭链式修复(chained fixups) + 导出trie，否则 TrollFools 自带的老版 ldid
-# 会报 "Unsupported Mach-O type"。改用经典 rebase/bind 格式，兼容老 ldid。
 YTUnlock_LDFLAGS := -Wl,-no_warn_inits -Wl,-no_fixup_chains -Wl,-no_exported_symbols
 
 include $(THEOS_MAKE_PATH)/tweak.mk
+
+# ===== 动态探针（opainject 手动注入，不走 substrate）=====
+LIBRARY_NAME := YTProbe
+YTProbe_FILES := probe/probe.m
+YTProbe_CFLAGS := -fobjc-arc -Wno-deprecated-declarations
+YTProbe_FRAMEWORKS := Foundation
+YTProbe_LDFLAGS := -Wl,-no_warn_inits -Wl,-no_fixup_chains -Wl,-no_exported_symbols
+
+include $(THEOS_MAKE_PATH)/library.mk

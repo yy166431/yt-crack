@@ -47,27 +47,29 @@ jobs:
       - name: Collect dylib
         run: |
           mkdir -p out
-          echo "=== 所有 YTUnlock.dylib 候选及其 filetype ==="
+          # 收集两个产物：YTUnlock.dylib(成品) + YTProbe.dylib(探针)
           # 排除 .dSYM 目录（里面有个同名文件但 filetype=MH_DSYM，ldid 会报 Unsupported Mach-O type）
-          # 只收 Mach-O filetype == MH_DYLIB (0x6) 的真正产物
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            # 用 file 判定；真正 dylib 显示 "dynamically linked shared library"，
-            # dSYM 显示 "dSYM companion file"
-            desc=$(file -b "$f")
-            echo "  candidate: $f -> $desc"
-            case "$desc" in
-              *"shared library"*|*"dynamically linked"*)
-                cp "$f" out/YTUnlock.dylib
-                echo "  ^ picked (real dylib)"
-                ;;
-            esac
-          done < <(find .theos -name 'YTUnlock.dylib' -not -path '*.dSYM*')
+          for name in YTUnlock YTProbe; do
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              desc=$(file -b "$f")
+              echo "  candidate: $f -> $desc"
+              case "$desc" in
+                *"shared library"*|*"dynamically linked"*)
+                  cp "$f" "out/$name.dylib"
+                  echo "  ^ picked $name (real dylib)"
+                  ;;
+              esac
+            done < <(find .theos -name "$name.dylib" -not -path '*.dSYM*')
+          done
 
           if [ ! -f out/YTUnlock.dylib ]; then
             echo "::error::未找到 filetype=MH_DYLIB 的 YTUnlock.dylib"
             echo "全部候选（含 dSYM）:"; find .theos -name '*.dylib*' -print
             exit 1
+          fi
+          if [ ! -f out/YTProbe.dylib ]; then
+            echo "::warning::未找到 YTProbe.dylib"
           fi
           echo "=== final dylib ==="
           ls -la out/
