@@ -145,6 +145,27 @@ static BOOL claimFireOnce(id vc) {
     return YES;
 }
 
+// 从 LoginVC 上找到当前 window（优先 self.view.window，退回 scene/app keyWindow）
+static UIWindow *findWindow(id vc) {
+    @try {
+        UIView *v = [vc valueForKey:@"view"];
+        UIWindow *w = v ? v.window : nil;
+        if (w) return w;
+    } @catch (__unused id e) {}
+    // 退回：遍历所有 window，取第一个 keyWindow / 可见的
+    @try {
+        for (UIWindow *w in [UIApplication sharedApplication].windows) {
+            if (w.isKeyWindow) return w;
+        }
+        UIWindow *any = [UIApplication sharedApplication].windows.firstObject;
+        if (any) return any;
+    } @catch (__unused id e) {}
+    return nil;
+}
+
+// 不再调用 onAuthorized block（其头部有完整性 guard，直接调会被系统打掉）。
+// 改为：从 block 对象里把它捕获的"真·YouTube 根 VC"(偏移 +0x28) 抠出来，
+// 自己做 setRootViewController，完全绕开那段 guard。
 static void fireUnlock(id vc) {
     if (![NSThread isMainThread]) {
         dispatch_async(dispatch_get_main_queue(), ^{ fireUnlock(vc); });
@@ -156,11 +177,42 @@ static void fireUnlock(id vc) {
         id blockObj = iv ? object_getIvar(vc, iv) : nil;
         if (!blockObj) { @try { blockObj = [vc valueForKey:@"onAuthorized"]; } @catch (__unused id e) {} }
         if (!blockObj) { YLOG(@"onAuthorized not ready"); return; }
-        // 通过 Block_copy 复制到堆，规范持有，避免直接调 ivar 里指针在某些环境下崩
-        AuthBlock blk = (AuthBlock)[blockObj copy];
-        YLOG(@"invoking onAuthorized on main thread -> unlock");
-        blk();
-        YLOG(@"onAuthorized returned OK");
+
+        // block 内存布局: +0x00 isa | +0x08 flags | +0x10 invoke | +0x18 desc
+        //                +0x20 弱引用 window | +0x28 强引用 rootVC
+        void * const *layout = (void * const *)(__bridge const void *)blockObj;
+        id cap20 = (__bridge id)layout[4];   // +0x20
+        id cap28 = (__bridge id)layout[5];   // +0x28
+
+        YLOG(@"block caps: +0x20=%@  +0x28=%@",
+             cap20 ? NSStringFromClass(object_getClass(cap20)) : @"nil",
+             cap28 ? NSStringFromClass(object_getClass(cap28)) : @"nil");
+
+        // 找出哪个捕获是 UIViewController（要装的根 VC），哪个是 UIWindow
+        UIViewController *rootVC = nil;
+        UIWindow *capWin = nil;
+        for (id c in @[ cap20 ?: [NSNull null], cap28 ?: [NSNull null] ]) {
+            if (c == [NSNull null]) continue;
+            if ([c isKindOfClass:[UIWindow class]]) capWin = c;
+            else if ([c isKindOfClass:[UIViewController class]]) rootVC = c;
+        }
+        if (!rootVC) {
+            // 兜底：+0x28 按约定就是 rootVC
+            if (cap28 && [cap28 isKindOfClass:[UIViewController class]]) rootVC = cap28;
+        }
+        if (!rootVC) { YLOG(@"rootVC not found in block caps, abort"); return; }
+
+        UIWindow *win = capWin ?: findWindow(vc);
+        if (!win) { YLOG(@"window not found, abort"); return; }
+
+        YLOG(@"manual unlock: setRootViewController:%@ on %@",
+             NSStringFromClass(object_getClass(rootVC)), NSStringFromClass(object_getClass(win)));
+        [UIView transitionWithView:win
+                          duration:0.3
+                           options:UIViewAnimationOptionTransitionCrossDissolve
+                        animations:^{ win.rootViewController = rootVC; }
+                        completion:^(BOOL fin){ YLOG(@"manual unlock done fin=%d", fin); }];
+        YLOG(@"manual unlock issued OK");
     } @catch (id e) {
         YLOG(@"fireUnlock exception: %@", e);
     }

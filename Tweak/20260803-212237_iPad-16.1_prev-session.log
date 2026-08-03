@@ -1,9 +1,0 @@
-
-[YTUnlock] ==== new session 2026-08-03 13:22:35 +0000 ====
-[YTUnlock] ctor start
-[YTUnlock] patching LoginViewController
-[YTUnlock] hooked viewDidAppear:
-[YTUnlock] hooked submitTapped
-[YTUnlock] ctor done (direct)
-[YTUnlock] LoginVC appeared, unlocking shortly
-[YTUnlock] invoking onAuthorized -> unlock
