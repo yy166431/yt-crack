@@ -1,0 +1,64 @@
+name: Build YTUnlock dylib
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: brew install ldid xz make
+
+      - name: Setup Theos
+        run: |
+          export THEOS=$HOME/theos
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
+
+      - name: Setup iOS SDK
+        run: |
+          export THEOS=$HOME/theos
+          cd "$THEOS/sdks"
+          # 拉取 theos 官方维护的 SDK 集合
+          curl -L https://github.com/theos/sdks/archive/refs/heads/master.zip -o sdks.zip
+          unzip -q sdks.zip
+          # 复制所有 .sdk 到 theos/sdks
+          cp -R sdks-master/*.sdk . 2>/dev/null || true
+          rm -rf sdks.zip sdks-master
+          echo "=== available SDKs ==="
+          ls -d *.sdk
+
+      - name: Build dylib
+        run: |
+          export THEOS=$HOME/theos
+          make clean || true
+          make FINALPACKAGE=1
+          echo "=== build tree ==="
+          find .theos -name '*.dylib' -print
+
+      - name: Collect dylib
+        run: |
+          mkdir -p out
+          find .theos -name 'YTUnlock.dylib' -exec cp {} out/ \; 2>/dev/null || true
+          if [ -z "$(ls -A out 2>/dev/null)" ]; then
+            find .theos -name '*.dylib' -exec cp {} out/ \; 2>/dev/null || true
+          fi
+          for f in out/*.dylib; do
+            ldid -S "$f" || true
+          done
+          echo "=== final dylib(s) ==="
+          ls -la out/
+          otool -L out/*.dylib || true
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTUnlock-dylib
+          path: out/*.dylib
+          if-no-files-found: error
