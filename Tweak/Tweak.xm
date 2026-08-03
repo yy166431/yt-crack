@@ -1,29 +1,143 @@
-// YouTube (亚马逊/TrollStore 版) 去授权 hook
+// YouTube (亚马逊/TrollStore 版) 去授权 hook + 远程崩溃日志
 //
-// 逆向结论：
-//   启动时 AppSceneDelegate 把 rootVC 设为注入的 LoginViewController(卡密登录界面)，
-//   挂了一个 void(^)(void) 回调存在 ivar _onAuthorized (@?, 偏移 +0x10)。
-//   验证通过后 [self onAuthorized]() 才切到真正的 YouTube。
-//   LoginViewController 自身实现了 viewDidLoad / viewDidAppear: / submitTapped。
+// 授权逻辑(逆向): 启动时 rootVC = 注入的 LoginViewController(卡密界面)，
+//   验证通过后 [self onAuthorized]() (ivar _onAuthorized, @?, +0x10) 才进真正的 YouTube。
+// 去授权: 在 viewDidAppear: 之后取出 _onAuthorized block 直接执行放行；短路 submitTapped。
 //
-// 去授权(纯运行时放行，不碰控制流平坦化的验证函数)：
-//   在 LoginViewController -viewDidAppear: 之后(界面已上屏、window 就绪，转场安全)
-//   直接取出 _onAuthorized block 执行 -> 等同验证通过进入 YouTube。
-//   同时短路 submitTapped，避免连作者已限卡的服务器。
-//
-// 关键安全措施(上一版加载即崩的教训)：
-//   - 不做 objc_copyClassList 全类扫描(早期加载遍历巨型App所有类极易崩)。
-//   - 不在 viewDidLoad 阶段 fire(太早，window 未就绪，转场会崩)。
-//   - 全程 @try/@catch，onAuthorized 只触发一次。
+// 崩溃诊断(设备"分析与数据"看不到崩溃日志时用):
+//   - 全程日志落盘到 App 沙盒 tmp/ytunlock.log
+//   - %ctor 首先安装 NSUncaughtExceptionHandler + signal handler(SIGSEGV/ABRT/BUS/ILL/TRAP)
+//     崩溃时把信号+backtrace 追加到日志
+//   - 每次启动先把"上一会话"的完整日志(含上次崩溃栈) POST 到远程服务器
+//     这样即使每次一开就崩，重开时也能把上次崩溃原因发出来
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <execinfo.h>
+#import <signal.h>
+#import <pthread.h>
+#import <fcntl.h>
+#import <unistd.h>
+#import <string.h>
 
-#define YLOG(fmt, ...) NSLog(@"[YTUnlock] " fmt, ##__VA_ARGS__)
+// ====== 配置: 崩溃日志上报地址(改成你的服务器) ======
+#define REPORT_URL @"http://159.75.14.193:8099/report"
+
+// ====== 日志文件路径 ======
+static NSString *logPath(void) {
+    return [NSTemporaryDirectory() stringByAppendingPathComponent:@"ytunlock.log"];
+}
+static NSString *prevLogPath(void) {
+    return [NSTemporaryDirectory() stringByAppendingPathComponent:@"ytunlock.prev.log"];
+}
+
+// 低层追加写(信号处理里也可用: 只用 write/open，不用 OC)
+static void rawAppend(const char *line) {
+    @try {
+        NSString *p = logPath();
+        int fd = open([p fileSystemRepresentation], O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) {
+            write(fd, line, strlen(line));
+            write(fd, "\n", 1);
+            close(fd);
+        }
+    } @catch (__unused id e) {}
+}
+
+static void YLOGf(NSString *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+    NSString *line = [NSString stringWithFormat:@"[YTUnlock] %@", s];
+    NSLog(@"%@", line);
+    rawAppend([line UTF8String]);
+}
+#define YLOG(...) YLOGf(__VA_ARGS__)
+
+// ====== 崩溃捕获 ======
+static void writeBacktrace(const char *reason) {
+    rawAppend("========== CRASH ==========");
+    rawAppend(reason);
+    void *cs[64];
+    int n = backtrace(cs, 64);
+    char **syms = backtrace_symbols(cs, n);
+    if (syms) {
+        for (int i = 0; i < n; i++) rawAppend(syms[i]);
+        free(syms);
+    }
+    rawAppend("========== END CRASH ==========");
+}
+
+static void sigHandler(int sig) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "FATAL SIGNAL %d", sig);
+    writeBacktrace(buf);
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void excHandler(NSException *e) {
+    @try {
+        NSString *r = [NSString stringWithFormat:@"NSException: %@ | %@\n%@",
+                       e.name, e.reason, [e.callStackSymbols componentsJoinedByString:@"\n"]];
+        rawAppend("========== NSEXCEPTION ==========");
+        rawAppend([r UTF8String]);
+        rawAppend("========== END NSEXCEPTION ==========");
+    } @catch (__unused id x) {}
+}
+
+static void installCrashHandlers(void) {
+    NSSetUncaughtExceptionHandler(&excHandler);
+    int sigs[] = {SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGTRAP, SIGFPE};
+    for (int i = 0; i < 6; i++) signal(sigs[i], &sigHandler);
+}
+
+// ====== 上报: 把某文件内容 POST 到服务器 ======
+static void reportFile(NSString *path, NSString *tag) {
+    @try {
+        NSData *data = [NSData dataWithContentsOfFile:path];
+        if (!data || data.length == 0) return;
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:REPORT_URL]];
+        req.HTTPMethod = @"POST";
+        req.HTTPBody = data;
+        [req setValue:@"text/plain" forHTTPHeaderField:@"Content-Type"];
+        NSString *dev = [[UIDevice currentDevice] name];
+        NSString *sys = [[UIDevice currentDevice] systemVersion];
+        [req setValue:[NSString stringWithFormat:@"%@-%@", dev, sys] forHTTPHeaderField:@"X-Device"];
+        [req setValue:tag forHTTPHeaderField:@"X-Tag"];
+        NSURLSession *s = [NSURLSession sessionWithConfiguration:
+                           [NSURLSessionConfiguration ephemeralSessionConfiguration]];
+        NSURLSessionDataTask *t = [s dataTaskWithRequest:req
+            completionHandler:^(NSData *d, NSURLResponse *r, NSError *err) {
+                YLOG(@"report(%@) -> %@", tag, err ? err.localizedDescription : @"sent");
+            }];
+        [t resume];
+    } @catch (id e) {
+        NSLog(@"[YTUnlock] reportFile exception %@", e);
+    }
+}
+
+// 启动时: 轮转日志(上次的存 prev)，并把上次的发出去
+static void rotateAndReportPrevious(void) {
+    @try {
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *cur = logPath(), *prev = prevLogPath();
+        if ([fm fileExistsAtPath:cur]) {
+            [fm removeItemAtPath:prev error:nil];
+            [fm moveItemAtPath:cur toPath:prev error:nil];
+        }
+        // 新会话开始
+        rawAppend("");
+        YLOG(@"==== new session %@ ====", [NSDate date]);
+        // 把上次会话(可能含崩溃栈)发出去
+        if ([fm fileExistsAtPath:prev]) reportFile(prev, @"prev-session");
+    } @catch (__unused id e) {}
+}
+
+// ====== 去授权 ======
 typedef void (^AuthBlock)(void);
 
-// 保证每个实例只触发一次
 static BOOL claimFireOnce(id vc) {
     static const void *KEY = &KEY;
     if (objc_getAssociatedObject(vc, KEY)) return NO;
@@ -31,16 +145,13 @@ static BOOL claimFireOnce(id vc) {
     return YES;
 }
 
-// 取 _onAuthorized block 并执行(主线程调用)
 static void fireUnlock(id vc) {
     @try {
         if (!vc) return;
         Ivar iv = class_getInstanceVariable(object_getClass(vc), "_onAuthorized");
         id blockObj = iv ? object_getIvar(vc, iv) : nil;
-        if (!blockObj) {
-            @try { blockObj = [vc valueForKey:@"onAuthorized"]; } @catch (__unused id e) {}
-        }
-        if (!blockObj) { YLOG(@"onAuthorized not ready yet"); return; }
+        if (!blockObj) { @try { blockObj = [vc valueForKey:@"onAuthorized"]; } @catch (__unused id e) {} }
+        if (!blockObj) { YLOG(@"onAuthorized not ready"); return; }
         AuthBlock blk = (AuthBlock)blockObj;
         YLOG(@"invoking onAuthorized -> unlock");
         blk();
@@ -52,8 +163,6 @@ static void fireUnlock(id vc) {
 static void patchClass(Class cls) {
     if (!cls) return;
     YLOG(@"patching %s", class_getName(cls));
-
-    // 1) viewDidAppear: 之后放行(界面已上屏，转场安全)
     {
         SEL sel = @selector(viewDidAppear:);
         Method m = class_getInstanceMethod(cls, sel);
@@ -62,7 +171,7 @@ static void patchClass(Class cls) {
             IMP repl = imp_implementationWithBlock(^(id self_, BOOL animated) {
                 ((void(*)(id, SEL, BOOL))orig)(self_, sel, animated);
                 if (claimFireOnce(self_)) {
-                    YLOG(@"LoginVC did appear, unlocking shortly");
+                    YLOG(@"LoginVC appeared, unlocking shortly");
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
                                    dispatch_get_main_queue(), ^{ fireUnlock(self_); });
                 }
@@ -70,17 +179,15 @@ static void patchClass(Class cls) {
             method_setImplementation(m, repl);
             YLOG(@"hooked viewDidAppear:");
         } else {
-            YLOG(@"no viewDidAppear: on class");
+            YLOG(@"no viewDidAppear:");
         }
     }
-
-    // 2) submitTapped 直接放行，不发网络验证
     {
         SEL sel = @selector(submitTapped);
         Method m = class_getInstanceMethod(cls, sel);
         if (m) {
             IMP repl = imp_implementationWithBlock(^(id self_) {
-                YLOG(@"submitTapped intercepted -> direct unlock");
+                YLOG(@"submitTapped -> direct unlock");
                 fireUnlock(self_);
             });
             method_setImplementation(m, repl);
@@ -90,20 +197,23 @@ static void patchClass(Class cls) {
 }
 
 %ctor {
+    // 崩溃捕获必须最先装(才能抓到后续任何崩溃)
+    installCrashHandlers();
+    rotateAndReportPrevious();
     @try {
-        YLOG(@"loaded");
+        YLOG(@"ctor start");
         Class c = objc_getClass("LoginViewController");
-        if (c) { patchClass(c); return; }
+        if (c) { patchClass(c); YLOG(@"ctor done (direct)"); return; }
 
-        // 类此刻还没注册：不扫描全类(危险)，只延迟到主线程再取一次
-        YLOG(@"LoginViewController missing at ctor, deferring to main queue");
+        YLOG(@"LoginViewController missing at ctor, defer to main queue");
         dispatch_async(dispatch_get_main_queue(), ^{
             @try {
                 Class c2 = objc_getClass("LoginViewController");
                 if (c2) patchClass(c2);
-                else YLOG(@"LoginViewController still missing (author may have renamed the gate)");
-            } @catch (id e) { YLOG(@"deferred patch exception: %@", e); }
+                else YLOG(@"LoginViewController still missing");
+            } @catch (id e) { YLOG(@"deferred exception: %@", e); }
         });
+        YLOG(@"ctor done (deferred)");
     } @catch (id e) {
         YLOG(@"ctor exception: %@", e);
     }
