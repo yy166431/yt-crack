@@ -25,14 +25,16 @@ jobs:
         run: |
           export THEOS=$HOME/theos
           cd "$THEOS/sdks"
-          # 拉取 theos 官方维护的 SDK 集合
           curl -L https://github.com/theos/sdks/archive/refs/heads/master.zip -o sdks.zip
           unzip -q sdks.zip
-          # 复制所有 .sdk 到 theos/sdks
           cp -R sdks-master/*.sdk . 2>/dev/null || true
           rm -rf sdks.zip sdks-master
           echo "=== available SDKs ==="
           ls -d *.sdk
+          # 必须有 iPhoneOS SDK，否则 theos 会退回 macOS SDK 编出错误平台的 dylib
+          if ! ls -d iPhoneOS*.sdk >/dev/null 2>&1; then
+            echo "::error::No iPhoneOS SDK found in theos/sdks"; exit 1
+          fi
 
       - name: Build dylib
         run: |
@@ -49,12 +51,19 @@ jobs:
           if [ -z "$(ls -A out 2>/dev/null)" ]; then
             find .theos -name '*.dylib' -exec cp {} out/ \; 2>/dev/null || true
           fi
-          for f in out/*.dylib; do
-            ldid -S "$f" || true
-          done
           echo "=== final dylib(s) ==="
           ls -la out/
-          otool -L out/*.dylib || true
+          echo "=== Mach-O 类型确认（必须是 arm64 iOS dylib，不能是 x86_64/macOS）==="
+          for f in out/*.dylib; do
+            echo ">>> $f"; file "$f"; lipo -info "$f" || true
+            echo "--- platform load command ---"
+            otool -l "$f" | grep -A4 -iE "LC_BUILD_VERSION|LC_VERSION_MIN_IPHONEOS|platform" | head -20 || true
+            otool -L "$f" || true
+          done
+          echo "=== ldid -S 复验（复现注入器的签名步骤）==="
+          for f in out/*.dylib; do
+            ldid -S "$f" && echo "ldid OK: $f" || echo "ldid FAILED: $f"
+          done
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4

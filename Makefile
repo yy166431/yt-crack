@@ -1,5 +1,6 @@
 TARGET := iphone:clang:latest:14.0
-ARCHS := arm64 arm64e
+# 主程序 YouTube 是纯 arm64（非 arm64e），只编 arm64 瘦二进制，避免 ldid 拒绝胖/arm64e
+ARCHS := arm64
 
 # 生成独立 dylib（不做 deb 打包），供 TrollStore/巨魔 注入
 THEOS_PACKAGE_SCHEME := rootless
