@@ -12,7 +12,8 @@ TWEAK_NAME := YTUnlock
 YTUnlock_FILES := Tweak/Tweak.xm
 YTUnlock_CFLAGS := -fobjc-arc -Wno-deprecated-declarations
 YTUnlock_FRAMEWORKS := UIKit Foundation
-# 只用 objc runtime + %ctor，不依赖 CydiaSubstrate
-YTUnlock_LDFLAGS := -Wl,-no_warn_inits
+# 关键：关闭链式修复(chained fixups) + 导出trie，否则 TrollFools 自带的老版 ldid
+# 会报 "Unsupported Mach-O type"。改用经典 rebase/bind 格式，兼容老 ldid。
+YTUnlock_LDFLAGS := -Wl,-no_warn_inits -Wl,-no_fixup_chains -Wl,-no_exported_symbols
 
 include $(THEOS_MAKE_PATH)/tweak.mk

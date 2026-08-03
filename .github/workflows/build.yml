@@ -60,6 +60,14 @@ jobs:
             otool -l "$f" | grep -A4 -iE "LC_BUILD_VERSION|LC_VERSION_MIN_IPHONEOS|platform" | head -20 || true
             otool -L "$f" || true
           done
+          echo "=== 检查是否残留 chained fixups（应为空，否则老 ldid 会拒绝）==="
+          for f in out/*.dylib; do
+            if otool -l "$f" | grep -q "LC_DYLD_CHAINED_FIXUPS"; then
+              echo "::warning::$f 仍含 LC_DYLD_CHAINED_FIXUPS"
+            else
+              echo "OK 无 chained fixups: $f"
+            fi
+          done
           echo "=== ldid -S 复验（复现注入器的签名步骤）==="
           for f in out/*.dylib; do
             ldid -S "$f" && echo "ldid OK: $f" || echo "ldid FAILED: $f"
