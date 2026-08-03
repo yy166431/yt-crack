@@ -146,15 +146,21 @@ static BOOL claimFireOnce(id vc) {
 }
 
 static void fireUnlock(id vc) {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ fireUnlock(vc); });
+        return;
+    }
     @try {
         if (!vc) return;
         Ivar iv = class_getInstanceVariable(object_getClass(vc), "_onAuthorized");
         id blockObj = iv ? object_getIvar(vc, iv) : nil;
         if (!blockObj) { @try { blockObj = [vc valueForKey:@"onAuthorized"]; } @catch (__unused id e) {} }
         if (!blockObj) { YLOG(@"onAuthorized not ready"); return; }
-        AuthBlock blk = (AuthBlock)blockObj;
-        YLOG(@"invoking onAuthorized -> unlock");
+        // 通过 Block_copy 复制到堆，规范持有，避免直接调 ivar 里指针在某些环境下崩
+        AuthBlock blk = (AuthBlock)[blockObj copy];
+        YLOG(@"invoking onAuthorized on main thread -> unlock");
         blk();
+        YLOG(@"onAuthorized returned OK");
     } @catch (id e) {
         YLOG(@"fireUnlock exception: %@", e);
     }
@@ -171,9 +177,13 @@ static void patchClass(Class cls) {
             IMP repl = imp_implementationWithBlock(^(id self_, BOOL animated) {
                 ((void(*)(id, SEL, BOOL))orig)(self_, sel, animated);
                 if (claimFireOnce(self_)) {
-                    YLOG(@"LoginVC appeared, unlocking shortly");
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
-                                   dispatch_get_main_queue(), ^{ fireUnlock(self_); });
+                    YLOG(@"LoginVC appeared, will unlock after settle");
+                    // 等 viewDidAppear 转场动画彻底结束再触发，避免转场重入导致栈破坏
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                                   dispatch_get_main_queue(), ^{
+                        YLOG(@"settle done, firing unlock now");
+                        fireUnlock(self_);
+                    });
                 }
             });
             method_setImplementation(m, repl);
